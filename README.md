@@ -1,3 +1,4 @@
+<img width="1920" height="1080" alt="thumbnail-1920x1080" src="https://github.com/user-attachments/assets/ad83e7a8-c232-48fc-ab47-d4990ed1bdc3" />
 # WA Flow Simulator — Figma Plugin
 
 Test your WhatsApp flows from FigJam directly inside Figma.
