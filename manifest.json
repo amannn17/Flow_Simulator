@@ -1,0 +1,9 @@
+{
+  "name": "WA Flow Simulator",
+  "id": "1644314844354925981",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figjam", "figma"],
+  "documentAccess": "dynamic-page"
+}

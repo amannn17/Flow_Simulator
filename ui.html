@@ -1,0 +1,2099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WA Flow Simulator</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  /* ── Modern WhatsApp light theme ── */
+  --wa-green: #25D366; --wa-dark: #017561; --wa-teal: #008069;
+  --wa-header: #008069; --wa-sent: #D9FDD3; --wa-recv: #FFFFFF;
+  --wa-bg: #EFEAE2;            /* chat wallpaper base */
+  --wa-link: #027EB5;          /* reply-button / link text */
+  --wa-tick: #53BDEB;          /* read receipts */
+  --wa-time: #667781;          /* timestamps + meta */
+  --wa-bubble-shadow: 0 1px 0.5px rgba(11,20,26,0.13);
+  --wa-btn-border: #E9EDEF;
+  --wa-letterbox: #0B141A;     /* dark gutter behind the phone */
+  --font: -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  /* ── Editor chrome ── */
+  --panel-bg: #F0F2F5; --border: #D1D5DB; --text: #111827;
+  --muted: #6B7280; --danger: #EF4444; --warning: #F59E0B;
+  --node-main: #C2E5FF; --node-cta: #AFF4C6; --node-no-resp: #FCD19C;
+  --node-wrong: #FFE8A3; --node-sub: #E4CCFF; --node-help: #FFC7C2;
+}
+body { font-family:var(--font); background:var(--panel-bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden; font-size:12px; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+
+/* ── TABS ── */
+.tabs { display:flex; background:var(--wa-teal); padding:0 8px; gap:2px; flex-shrink:0; }
+.tab { padding:8px 14px; cursor:pointer; color:rgba(255,255,255,0.7); font-size:11px; font-weight:500; border-bottom:2px solid transparent; transition:all 0.15s; white-space:nowrap; }
+.tab.active { color:#fff; border-bottom-color:#25D366; }
+.tab-panel { display:none; flex:1; overflow:hidden; flex-direction:column; }
+.tab-panel.active { display:flex; }
+
+/* ── FLOW CANVAS TAB ── */
+#tab-editor { flex-direction: row; }
+
+.canvas-wrap {
+  flex: 1; min-width: 0; position: relative; overflow: hidden;
+  background: #F8F9FB;
+  background-image: radial-gradient(circle, #CBD5E1 1px, transparent 1px);
+  background-size: 24px 24px;
+  cursor: grab;
+  user-select: none;
+}
+.canvas-wrap.panning { cursor: grabbing; }
+
+.canvas-viewport {
+  position: absolute; top: 0; left: 0;
+  transform-origin: 0 0;
+  width: 4000px; height: 4000px;
+}
+
+/* SVG edges layer */
+.edges-svg {
+  position: absolute; top: 0; left: 0;
+  width: 4000px; height: 4000px;
+  pointer-events: none;
+  overflow: visible;
+}
+.edge-path {
+  fill: none; stroke: #94A3B8; stroke-width: 2;
+  marker-end: url(#arrowhead);
+}
+.edge-path.auto-gen { stroke: #CBD5E1; stroke-dasharray: 5 3; }
+.edge-path.ec-no_response { stroke: #FB923C; }
+.edge-path.ec-wrong_answer { stroke: #FBBF24; }
+.edge-path.ec-submission { stroke: #A78BFA; }
+.edge-path.ec-help { stroke: #F87171; }
+/* invisible fat path that captures clicks on an edge */
+.edge-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+.edge-hit:hover + .edge-path { stroke-width: 3; }
+/* live link-drag path */
+.edge-link-temp { fill: none; stroke: var(--wa-dark); stroke-width: 2.5; stroke-dasharray: 4 4; pointer-events: none; }
+
+/* Canvas toolbar */
+.canvas-toolbar {
+  position: absolute; top: 8px; left: 8px; z-index: 10;
+  display: flex; gap: 4px;
+}
+.canvas-btn {
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: #fff; font-size: 10px; cursor: pointer; color: var(--text);
+  font-family: var(--font); box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  transition: background 0.1s;
+}
+.canvas-btn:hover { background: #F3F4F6; }
+.canvas-btn.primary { background: var(--wa-dark); color: #fff; border-color: var(--wa-dark); }
+.canvas-btn.primary:hover { background: var(--wa-teal); }
+
+/* Zoom indicator */
+.zoom-indicator {
+  position: absolute; bottom: 8px; left: 8px; z-index: 10;
+  font-size: 10px; color: var(--muted); background: #fff;
+  padding: 3px 8px; border-radius: 10px; border: 1px solid var(--border);
+}
+
+/* ── NODE CARDS ── */
+.flow-node-card {
+  position: absolute;
+  width: 200px;
+  background: #fff;
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  transition: box-shadow 0.15s, border-color 0.15s;
+  cursor: default;
+  font-size: 11px;
+}
+.flow-node-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.13); }
+.flow-node-card.selected { border-color: var(--wa-dark); box-shadow: 0 0 0 3px rgba(18,140,126,0.15); }
+.flow-node-card.dragging { box-shadow: 0 8px 24px rgba(0,0,0,0.18); opacity: 0.95; cursor: grabbing; z-index: 100; }
+
+.node-color-bar { height: 5px; border-radius: 8px 8px 0 0; }
+.bar-main_flow { background: var(--node-main); }
+.bar-cta { background: var(--node-cta); }
+.bar-no_response { background: var(--node-no-resp); }
+.bar-wrong_answer { background: var(--node-wrong); }
+.bar-submission { background: var(--node-sub); }
+.bar-help { background: var(--node-help); }
+.bar-message { background: var(--node-main); }
+
+.node-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px 4px;
+}
+.node-type-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.dot-main_flow, .dot-message { background: #60A5FA; }
+.dot-cta { background: #34D399; }
+.dot-no_response { background: #FB923C; }
+.dot-wrong_answer { background: #FBBF24; }
+.dot-submission { background: #A78BFA; }
+.dot-help { background: #F87171; }
+
+.node-type-label { font-size: 9px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; flex: 1; }
+.node-idx { font-size: 9px; color: #CBD5E1; font-weight: 500; }
+
+/* ── NODE BODY (editable inline) ── */
+.node-body { padding: 0 10px 8px; }
+
+.node-image-preview {
+  width: 100%; border-radius: 6px; overflow: hidden; margin-bottom: 6px;
+  background: #1a1a2e; min-height: 60px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.node-image-preview img { width: 100%; display: block; border-radius: 6px; }
+.node-image-preview .img-placeholder {
+  color: rgba(255,255,255,0.4); font-size: 10px; text-align: center; padding: 12px;
+}
+.node-img-remove {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,0.5); color: #fff; border: none;
+  border-radius: 50%; width: 18px; height: 18px; font-size: 10px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+
+.node-text-area {
+  width: 100%; border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 7px; font-size: 11px; font-family: var(--font);
+  color: var(--text); resize: none; min-height: 44px; max-height: 100px;
+  background: #FAFAFA; line-height: 1.4;
+}
+.node-text-area:focus { outline: none; border-color: var(--wa-dark); background: #fff; }
+.node-text-placeholder { color: #aaa; }
+
+/* Buttons editor */
+.node-btns { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.node-btn-row { display: flex; align-items: center; gap: 4px; }
+.node-btn-input {
+  flex: 1; border: 1px solid var(--node-cta); border-radius: 5px;
+  padding: 3px 6px; font-size: 10px; font-family: var(--font); color: var(--text);
+  background: #F0FDF4;
+}
+.node-btn-input:focus { outline: none; border-color: var(--wa-dark); }
+.node-btn-remove {
+  width: 16px; height: 16px; border-radius: 50%; border: none;
+  background: #FEE2E2; color: #EF4444; font-size: 10px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.node-add-btn {
+  font-size: 10px; color: var(--wa-dark); background: none; border: none;
+  cursor: pointer; padding: 2px 0; text-align: left; font-family: var(--font);
+}
+.node-btn-char { font-size: 9px; color: var(--muted); min-width: 24px; text-align: right; }
+.node-btn-char.over { color: var(--danger); font-weight: 600; }
+
+/* Delay slider */
+.node-delay { margin-top: 7px; }
+.node-delay-label {
+  display: flex; justify-content: space-between;
+  font-size: 9px; color: var(--muted); margin-bottom: 3px;
+}
+.node-delay-val { color: var(--wa-dark); font-weight: 600; }
+input[type=range] {
+  width: 100%; accent-color: var(--wa-dark);
+  height: 3px; cursor: pointer;
+}
+
+/* Node footer actions */
+.node-footer {
+  display: flex; gap: 4px; padding: 5px 10px 8px; border-top: 1px solid #F3F4F6;
+  margin-top: 4px;
+}
+.node-action-btn {
+  flex: 1; padding: 3px 0; border-radius: 5px; border: 1px solid var(--border);
+  background: #fff; font-size: 9px; cursor: pointer; color: var(--muted);
+  font-family: var(--font); text-align: center; transition: all 0.1s;
+}
+.node-action-btn:hover { background: #F3F4F6; color: var(--text); }
+.node-action-btn.active { background: #E7F5F3; border-color: var(--wa-dark); color: var(--wa-teal); }
+.node-img-upload { display: none; }
+
+/* Auto-generated node badge */
+.auto-badge {
+  font-size: 8px; background: #F3F4F6; color: var(--muted);
+  padding: 1px 5px; border-radius: 8px; margin-left: auto;
+}
+
+/* ── NODE CONNECTION PLUGS ── */
+.node-plug {
+  position: absolute; width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--wa-dark);
+  left: 50%; transform: translateX(-50%);
+  cursor: crosshair; z-index: 5; transition: transform 0.1s, background 0.1s;
+}
+.node-plug:hover { background: var(--wa-dark); transform: translateX(-50%) scale(1.25); }
+.node-plug.plug-out { bottom: -7px; }
+.node-plug.plug-in  { top: -7px; background: #fff; border-color: #94A3B8; cursor: pointer; }
+.flow-node-card.link-target { border-color: var(--wa-dark); box-shadow: 0 0 0 3px rgba(1,117,97,0.25); }
+
+/* ── NODE TYPE SELECTOR (in header) ── */
+.node-type-select {
+  font-size: 9px; font-family: var(--font); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 3px;
+  background: #fff; cursor: pointer; max-width: 96px;
+}
+.node-type-select:focus { outline: none; border-color: var(--wa-dark); }
+.node-del-btn {
+  width: 16px; height: 16px; border-radius: 5px; border: none;
+  background: #FEE2E2; color: #EF4444; font-size: 10px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  margin-left: 4px;
+}
+.node-del-btn:hover { background: #FECACA; }
+
+/* ── BUTTON VALIDATION ── */
+.node-btn-wrap { display: flex; flex-direction: column; gap: 1px; }
+.node-btn-input.invalid { border-color: var(--danger); background: #FEF2F2; }
+.node-btn-input.warn { border-color: var(--warning); background: #FFFBEB; }
+.node-btn-msg { font-size: 8px; line-height: 1.3; padding: 1px 2px 0; }
+.node-btn-msg.err { color: var(--danger); }
+.node-btn-msg.warn { color: #B45309; }
+
+/* ── EDGE POPOVER ── */
+.edge-popover {
+  position: absolute; z-index: 200; background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); padding: 8px;
+  font-size: 10px; width: 168px; font-family: var(--font);
+}
+.edge-popover label { display: block; font-size: 9px; color: var(--muted); margin: 0 0 3px; font-weight: 600; }
+.edge-popover select, .edge-popover input {
+  width: 100%; font-size: 10px; font-family: var(--font); padding: 4px 5px;
+  border: 1px solid var(--border); border-radius: 5px; margin-bottom: 7px; color: var(--text);
+}
+.edge-popover .ep-row { display: flex; gap: 5px; }
+.edge-popover button {
+  flex: 1; padding: 5px 0; border-radius: 5px; border: none; cursor: pointer;
+  font-size: 10px; font-family: var(--font);
+}
+.ep-del { background: #FEE2E2; color: #EF4444; }
+.ep-del:hover { background: #FECACA; }
+.ep-close { background: #F3F4F6; color: var(--text); }
+.ep-close:hover { background: #E5E7EB; }
+
+/* ── WA SIMULATOR (phone interior) ── */
+.wa-header {
+  background: var(--wa-header); color: #fff;
+  padding: 8px 10px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.wa-avatar { width:28px;height:28px;border-radius:50%;background:#25D366;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700; }
+.wa-name { font-size:12px;font-weight:600; }
+.wa-status { font-size:9px;color:rgba(255,255,255,0.7); }
+.wa-header-info { flex:1; }
+.wa-restart { background:none;border:none;color:rgba(255,255,255,0.6);cursor:pointer;font-size:10px;padding:2px 4px; }
+
+.sim-progress { background:rgba(0,0,0,0.12);padding:2px 8px;display:flex;align-items:center;gap:6px;flex-shrink:0; }
+.progress-bar-track { flex:1;height:2px;background:rgba(255,255,255,0.2);border-radius:2px;overflow:hidden; }
+.progress-bar-fill { height:100%;background:var(--wa-green);border-radius:2px;transition:width 0.4s; }
+.progress-label { font-size:9px;color:rgba(255,255,255,0.7);white-space:nowrap; }
+
+.chat-area { flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:3px;scroll-behavior:smooth; }
+
+.bubble-wrap { display:flex;flex-direction:column;align-items:flex-start;max-width:85%;animation:fadeUp 0.2s ease; }
+.bubble-wrap.sent { align-self:flex-end;align-items:flex-end; }
+@keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+.bubble { padding:5px 9px;border-radius:7px;font-size:11px;font-weight:400;line-height:1.4;box-shadow:var(--wa-bubble-shadow);white-space:pre-wrap;word-break:break-word; }
+.bubble.recv { background:var(--wa-recv);border-top-left-radius:2px;color:#111; }
+.bubble.sent { background:var(--wa-sent);border-top-right-radius:2px;color:#111; }
+.bubble-time { font-size:9px;color:var(--wa-time);margin-top:1px;padding:0 2px; }
+
+.image-bubble { border-radius:7px;overflow:hidden;box-shadow:var(--wa-bubble-shadow);max-width:180px; }
+.image-bubble img { display:block;width:100%;border-radius:7px; }
+
+.typing-indicator { display:flex;align-items:center;gap:3px;padding:7px 10px;background:#fff;border-radius:7px;border-top-left-radius:2px;box-shadow:var(--wa-bubble-shadow);width:fit-content; }
+.dot { width:5px;height:5px;border-radius:50%;background:#999;animation:bounce 1.2s infinite; }
+.dot:nth-child(2){animation-delay:0.2s}.dot:nth-child(3){animation-delay:0.4s}
+@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-4px)}}
+
+.cta-container { display:flex;flex-direction:column;gap:2px;margin-top:3px;width:100%;max-width:85%;align-self:flex-start; }
+.cta-btn { background:#fff;border:none;border-top:1px solid #E9EDEF;border-radius:0;padding:9px 10px;font-size:12.5px;color:var(--wa-link);cursor:pointer;text-align:center;font-family:var(--font);font-weight:500;transition:background 0.1s; }
+.cta-btn:first-of-type { border-radius:7px 7px 0 0;border-top:none; }
+.cta-btn:hover{background:#F5F6F6} .cta-btn:disabled{opacity:0.4;cursor:default}
+
+/* ── CTA 3-option tester ── */
+.cta-tester {
+  background:#fff;border-radius:8px;overflow:hidden;
+  box-shadow:var(--wa-bubble-shadow);margin-top:3px;
+  border:1px solid var(--border);font-size:10px;
+  animation:fadeUp 0.2s ease;
+}
+.cta-tester-label {
+  padding:5px 10px 3px;font-size:9px;font-weight:600;
+  text-transform:uppercase;letter-spacing:0.4px;
+  color:var(--muted);background:#F9FAFB;
+  border-bottom:1px solid var(--border);
+}
+.cta-tester-row {
+  display:flex;align-items:center;gap:0;
+  border-bottom:1px solid #F3F4F6;
+}
+.cta-tester-row:last-child{border-bottom:none;}
+.cta-tester-btn {
+  flex:1;padding:7px 8px;background:none;border:none;
+  cursor:pointer;font-size:10px;font-family:var(--font);
+  text-align:left;color:var(--text);transition:background 0.1s;
+  display:flex;align-items:center;gap:5px;
+}
+.cta-tester-btn:hover{background:#F3F4F6;}
+.cta-tester-btn.continue{color:#0A5C2A;}
+.cta-tester-btn.no-resp{color:#7A3E00;}
+.cta-tester-btn.wrong{color:#6B4800;}
+.cta-tester-icon{font-size:11px;flex-shrink:0;}
+.cta-tester-btn:disabled{opacity:0.35;cursor:default;}
+
+.timeout-bar { background:#fff;border-radius:7px;padding:6px 8px;margin-top:3px;box-shadow:var(--wa-bubble-shadow); }
+.timeout-label { display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:3px; }
+.timeout-track { height:2px;background:#F3F4F6;border-radius:2px;overflow:hidden; }
+.timeout-fill { height:100%;background:var(--danger);border-radius:2px;transition:width 1s linear; }
+.timeout-countdown { color:var(--danger);font-weight:600; }
+
+.input-area { background:#F0F2F5;padding:5px 6px;display:flex;align-items:center;gap:4px;border-top:1px solid var(--border);flex-shrink:0; }
+.msg-input { flex:1;border:none;border-radius:16px;padding:5px 10px;font-size:11px;font-family:var(--font);background:#fff;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.1); }
+.send-btn { width:28px;height:28px;border-radius:50%;border:none;background:var(--wa-green);color:#fff;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+.send-btn:disabled{background:#ccc;cursor:default}
+
+/* ── SIMULATOR TAB → 9:16 PHONE IN A LETTERBOX ── */
+#tab-simulator { background: var(--wa-letterbox); }
+.sim-stage {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 0;
+  background: var(--wa-letterbox); padding: 8px; overflow: hidden;
+}
+/* Dev / QA controls — clearly outside the phone */
+.test-tools {
+  flex-shrink: 0; width: 100%;
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 5px 8px; background: #111B21; border-bottom: 1px solid #0a1014;
+}
+.test-tools .tt-label { font-size: 9px; color: #8696A0; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; margin-right: 2px; }
+.tt-btn {
+  padding: 3px 8px; border-radius: 5px; border: 1px solid #2A3942;
+  background: #202C33; color: #E9EDEF; font-size: 9px; cursor: pointer; font-family: var(--font);
+}
+.tt-btn:hover { background: #2A3942; }
+
+.phone-frame {
+  position: relative; height: 100%; aspect-ratio: 9 / 16; max-width: 100%;
+  background: var(--wa-bg); border-radius: 26px; overflow: hidden;
+  box-shadow: 0 0 0 8px #0d1418, 0 14px 40px rgba(0,0,0,0.5);
+  display: flex; flex-direction: column;
+  /* WhatsApp doodle-ish wallpaper tint */
+  background-image:
+    radial-gradient(circle at 20% 15%, rgba(0,0,0,0.015) 0 2px, transparent 2px),
+    radial-gradient(circle at 70% 60%, rgba(0,0,0,0.015) 0 2px, transparent 2px);
+  background-size: 60px 60px, 80px 80px;
+}
+/* phone status bar */
+.phone-statusbar {
+  flex-shrink: 0; height: 22px; background: var(--wa-header); color: #fff;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px; font-size: 10px; font-weight: 600;
+}
+.phone-statusbar .sb-icons { display: flex; gap: 4px; align-items: center; font-size: 9px; }
+
+.sim-wrap { flex:1; display:flex; flex-direction:column; overflow:hidden; min-height: 0; }
+.sim-wrap .wa-header { padding:8px 12px; }
+.sim-wrap .wa-avatar { width:32px;height:32px;font-size:14px; }
+.sim-wrap .wa-name { font-size:13px; }
+.sim-wrap .chat-area { padding:10px 8px; }
+.sim-wrap .bubble { font-size:12.5px; }
+.sim-wrap .cta-btn { font-size:12.5px; }
+.sim-wrap .input-area { padding:7px 8px; }
+.sim-wrap .msg-input { font-size:12px; }
+.sim-wrap .send-btn { width:34px;height:34px;font-size:14px; }
+
+/* ── OVER-FOLD WARNING (text shown in full; flag only) ── */
+.bubble-text { display: block; white-space: pre-wrap; word-break: break-word; }
+.fold-warning {
+  align-self: flex-start; max-width: 85%;
+  font-size: 9px; line-height: 1.35; color: #B45309; background: #FFFBEB;
+  border: 1px solid #FDE68A; border-radius: 6px; padding: 4px 7px; margin-top: 2px;
+}
+.bubble-wrap.sent .fold-warning { align-self: flex-end; }
+
+/* Empty / loading */
+.empty-state { flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted);padding:20px;text-align:center; }
+.empty-icon { font-size:28px; }
+.empty-title { font-size:13px;font-weight:600;color:var(--text); }
+.empty-sub { font-size:10px;line-height:1.5; }
+
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.15);border-radius:2px}
+@keyframes loadingPulse{0%,100%{opacity:0.5}50%{opacity:1}}
+/* ── TOAST ── */
+.toast {
+  position: fixed; left: 50%; bottom: 16px; transform: translate(-50%, 12px);
+  background: #1F2937; color: #fff; font-size: 11px; line-height: 1.4;
+  padding: 9px 14px; border-radius: 8px; max-width: 80%; z-index: 9999;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3); opacity: 0; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s; font-family: var(--font);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <div class="tab active" data-tab="editor">🗂 Flow Canvas</div>
+  <div class="tab" data-tab="simulator">▶ Simulator</div>
+</div>
+
+<!-- ═══ FLOW CANVAS TAB ═══ -->
+<div class="tab-panel active" id="tab-editor">
+
+  <!-- Canvas area -->
+  <div class="canvas-wrap" id="canvasWrap">
+
+    <!-- Loading overlay — shown while async parse runs -->
+    <div id="loadingOverlay" style="
+      position:absolute;inset:0;z-index:50;
+      background:rgba(248,249,251,0.95);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:10px;font-family:var(--font);
+    ">
+      <div style="font-size:28px;">⏳</div>
+      <div style="font-size:13px;font-weight:600;color:var(--text);">Parsing canvas...</div>
+      <div id="loadingStatus" style="font-size:11px;color:var(--muted);max-width:260px;text-align:center;line-height:1.5;">
+        Detecting nodes and exporting images.
+      </div>
+      <div style="width:200px;height:3px;background:#E5E7EB;border-radius:2px;overflow:hidden;margin-top:4px;">
+        <div id="loadingBar" style="height:100%;width:10%;background:var(--wa-dark);border-radius:2px;transition:width 0.4s;animation:loadingPulse 1.5s ease-in-out infinite;"></div>
+      </div>
+    </div>
+
+    <div class="canvas-viewport" id="canvasViewport">
+      <svg class="edges-svg" id="edgesSvg">
+        <defs>
+          <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#94A3B8"/>
+          </marker>
+          <marker id="arrowhead-auto" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#CBD5E1"/>
+          </marker>
+        </defs>
+      </svg>
+      <!-- Node cards injected here -->
+    </div>
+
+    <div class="canvas-toolbar">
+      <button class="canvas-btn" onclick="fitCanvas()">⊡ Fit</button>
+      <button class="canvas-btn" onclick="zoomIn()">+</button>
+      <button class="canvas-btn" onclick="zoomOut()">−</button>
+      <button class="canvas-btn" onclick="createNode()">＋ New node</button>
+      <button class="canvas-btn primary" onclick="runSimulator()">▶ Simulate</button>
+    </div>
+    <div class="zoom-indicator" id="zoomIndicator">100%</div>
+    <div id="editorHint" style="position:absolute;bottom:8px;right:8px;z-index:10;font-size:9px;color:var(--muted);background:#fff;padding:4px 9px;border-radius:10px;border:1px solid var(--border);max-width:240px;line-height:1.4;">
+      Drag a node's bottom <b>●</b> plug onto another node to connect · click an edge to relabel/delete
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SIMULATOR TAB → 9:16 PHONE ═══ -->
+<div class="tab-panel" id="tab-simulator">
+
+  <!-- QA / dev controls (outside the phone) -->
+  <div class="test-tools">
+    <span class="tt-label">Test</span>
+    <button class="tt-btn" onclick="restartSim('full')">↺ Restart</button>
+    <button class="tt-btn" onclick="skipDelay('full')">⏭ Skip delay</button>
+    <button class="tt-btn" onclick="triggerEdgeCase('no_response','full')">⏰ No response</button>
+    <button class="tt-btn" onclick="triggerEdgeCase('wrong_answer','full')">❌ Wrong</button>
+    <button class="tt-btn" onclick="triggerEdgeCase('submission','full')">📥 Submission</button>
+    <button class="tt-btn" onclick="triggerEdgeCase('help','full')">🆘 Help</button>
+  </div>
+
+  <!-- Letterbox stage that centers the phone -->
+  <div class="sim-stage">
+    <div class="phone-frame">
+      <div class="phone-statusbar">
+        <span id="phoneClock">9:41</span>
+        <span class="sb-icons">●●● ▢ 100%</span>
+      </div>
+      <div class="sim-wrap">
+        <div class="wa-header">
+          <div class="wa-avatar">🤖</div>
+          <div class="wa-header-info">
+            <div class="wa-name">Flow Bot</div>
+            <div class="wa-status" id="fullWaStatus">online</div>
+          </div>
+          <button style="background:none;border:none;color:rgba(255,255,255,0.85);cursor:pointer;font-size:13px;" onclick="restartSim('full')">↺</button>
+        </div>
+        <div class="sim-progress">
+          <div class="progress-bar-track"><div class="progress-bar-fill" id="fullProgressFill" style="width:0%"></div></div>
+          <span class="progress-label" id="fullProgressLabel">0/0</span>
+        </div>
+        <div class="chat-area" id="fullChatArea"></div>
+        <div class="input-area">
+          <input class="msg-input" id="fullMsgInput" placeholder="Type a message..." />
+          <button class="send-btn" id="fullSendBtn" onclick="sendUserMessage('full')" disabled>➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+var flow = { nodes: [], startIndex: 0 };
+
+// Canvas pan/zoom state
+var SVGNS = 'http://www.w3.org/2000/svg';
+var canvas = {
+  scale: 1, panX: 40, panY: 40,
+  isPanning: false, lastMouseX: 0, lastMouseY: 0,
+  draggingNode: null, dragOffsetX: 0, dragOffsetY: 0,
+  linking: null,
+};
+
+// One simulator instance: 'full' (the phone in the Simulator tab)
+var sims = {
+  full:  { currentIndex: null, history: [], waitingForInput: false, timeoutTimer: null, delayTimer: null, totalSteps: 0 },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLUGIN BRIDGE
+// ═══════════════════════════════════════════════════════════════════════════════
+window.onmessage = function(event) {
+  var msg = event.data.pluginMessage;
+  if (!msg) return;
+
+  if (msg.type === 'parse-progress') {
+    var statusEl = document.getElementById('loadingStatus');
+    var barEl = document.getElementById('loadingBar');
+    if (statusEl) statusEl.textContent = msg.text;
+    // Rough progress from message text
+    if (msg.text && msg.text.indexOf('Exporting image') !== -1) {
+      var m = msg.text.match(/(\d+) of (\d+)/);
+      if (m && barEl) barEl.style.width = Math.round((parseInt(m[1]) / parseInt(m[2])) * 80 + 10) + '%';
+    } else if (msg.text && msg.text.indexOf('Done') !== -1) {
+      if (barEl) barEl.style.width = '100%';
+    }
+  }
+
+  if (msg.type === 'flow-data') {
+    // Hide loading overlay
+    var overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.style.display = 'none';
+
+    // DEBUG: log first 3 nodes so we can see what was parsed
+    var debugNodes = msg.flow.nodes.slice(0, 3);
+    for (var di = 0; di < debugNodes.length; di++) {
+      var dn = debugNodes[di];
+      console.log('[WA-SIM] Node ' + di + ':', JSON.stringify({
+        id: dn.id, text: dn.text ? dn.text.slice(0, 60) : null,
+        kind: dn.kind, buttons: dn.buttons, next: dn.next,
+        edgeCases: (dn.edgeCases||[]).map(function(e){return e.type;}),
+        hasImage: !!dn.imageData
+      }));
+    }
+    console.log('[WA-SIM] Total nodes:', msg.flow.nodes.length, '| startIndex:', msg.flow.startIndex);
+
+    loadFlow(msg.flow);
+  }
+
+  if (msg.type === 'parse-error') {
+    var statusEl = document.getElementById('loadingStatus');
+    var overlay = document.getElementById('loadingOverlay');
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">⚠️ ' + msg.error + '</span><br><br><button onclick="parseCanvas()" style="padding:5px 14px;border-radius:6px;border:none;background:var(--wa-dark);color:#fff;cursor:pointer;font-size:11px;">↺ Retry</button>';
+    console.error('Parse error:', msg.error);
+  }
+};
+
+function parseCanvas() {
+  parent.postMessage({ pluginMessage: { type: 'parse-canvas' } }, '*');
+}
+
+// Phone status-bar clock
+(function() {
+  var c = document.getElementById('phoneClock');
+  if (c) c.textContent = currentTime();
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FLOW LOADING
+// ═══════════════════════════════════════════════════════════════════════════════
+function loadFlow(newFlow) {
+  flow = newFlow;
+  // Inject auto-generated edge-case child nodes for CTA nodes
+  injectAutoNodes();
+  // Compute layout positions
+  computeLayout();
+  // Render
+  renderCanvas();
+  // Start the simulator
+  sims.full.totalSteps = flow.nodes.filter(function(n) { return n.kind !== 'delay'; }).length;
+  restartSim('full');
+}
+
+// Inject virtual no_response / wrong_answer child nodes for CTA nodes
+// that don't already have them in edgeCases
+function injectAutoNodes() {
+  var toAdd = [];
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var node = flow.nodes[i];
+    if (node.kind !== 'cta' || !node.buttons || node.buttons.length === 0) continue;
+
+    var hasNR = false, hasWA = false;
+    for (var j = 0; j < (node.edgeCases || []).length; j++) {
+      if (node.edgeCases[j].type === 'no_response') hasNR = true;
+      if (node.edgeCases[j].type === 'wrong_answer') hasWA = true;
+    }
+
+    if (!hasNR) {
+      var nrIdx = flow.nodes.length + toAdd.length;
+      toAdd.push({
+        id: node.id + '_auto_nr', figmaId: null, index: nrIdx,
+        x: 0, y: 0, text: "We haven't heard from you — still there? 👋",
+        kind: 'message', isAuto: true, autoParentIndex: i, autoType: 'no_response',
+        buttons: [], edgeCases: [], noResponseNext: null, next: [], imageData: null,
+        delayMs: 2000,
+      });
+      if (!node.edgeCases) node.edgeCases = [];
+      node.edgeCases.push({ id: node.id+'_ec_nr', nodeId: node.id+'_auto_nr', type: 'no_response', trigger: { type:'no_response', after_hours:2 }, text: "We haven't heard from you — still there? 👋", autoIdx: nrIdx });
+    }
+    if (!hasWA) {
+      var waIdx = flow.nodes.length + toAdd.length;
+      toAdd.push({
+        id: node.id + '_auto_wa', figmaId: null, index: waIdx,
+        x: 0, y: 0, text: 'Please use the buttons below to respond 👆',
+        kind: 'message', isAuto: true, autoParentIndex: i, autoType: 'wrong_answer',
+        buttons: [], edgeCases: [], noResponseNext: null, next: [], imageData: null,
+        delayMs: 2000,
+      });
+      if (!node.edgeCases) node.edgeCases = [];
+      node.edgeCases.push({ id: node.id+'_ec_wa', nodeId: node.id+'_auto_wa', type: 'wrong_answer', trigger: { type:'wrong_answer' }, text: 'Please use the buttons below to respond 👆', autoIdx: waIdx });
+    }
+  }
+  for (var i = 0; i < toAdd.length; i++) {
+    var newIdx = flow.nodes.length;
+    toAdd[i].index = newIdx;
+    flow.nodes.push(toAdd[i]);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TREE LAYOUT — Reingold-Tilford inspired simple layered layout
+// ═══════════════════════════════════════════════════════════════════════════════
+var NODE_W = 200, NODE_GAP_X = 60, NODE_GAP_Y = 80;
+
+function computeLayout() {
+  if (flow.nodes.length === 0) return;
+
+  // Build adjacency
+  var children = {}; // index → [child indices]
+  for (var i = 0; i < flow.nodes.length; i++) children[i] = [];
+
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var node = flow.nodes[i];
+    for (var j = 0; j < (node.next || []).length; j++) {
+      var ci = node.next[j].toIndex;
+      if (ci !== undefined && ci !== null && !children[i].includes(ci)) children[i].push(ci);
+    }
+    // Auto-generated edge case nodes
+    for (var j = 0; j < (node.edgeCases || []).length; j++) {
+      var ec = node.edgeCases[j];
+      if (ec.autoIdx !== undefined) {
+        if (!children[i].includes(ec.autoIdx)) children[i].push(ec.autoIdx);
+      }
+    }
+  }
+
+  // BFS level assignment from root
+  var levels = {};
+  var visited = {};
+  var queue = [flow.startIndex || 0];
+  levels[flow.startIndex || 0] = 0;
+  visited[flow.startIndex || 0] = true;
+
+  while (queue.length > 0) {
+    var cur = queue.shift();
+    var kids = children[cur] || [];
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      if (!visited[k]) {
+        visited[k] = true;
+        levels[k] = (levels[cur] || 0) + 1;
+        queue.push(k);
+      }
+    }
+  }
+
+  // Group nodes by level
+  var byLevel = {};
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var lv = levels[i] !== undefined ? levels[i] : 99;
+    if (!byLevel[lv]) byLevel[lv] = [];
+    byLevel[lv].push(i);
+  }
+
+  // Estimate node heights
+  function nodeHeight(n) {
+    var base = 120;
+    if (n.imageData) base += 80;
+    if (n.buttons && n.buttons.length) base += n.buttons.length * 26 + 10;
+    return base;
+  }
+
+  // Assign X/Y
+  var levelKeys = Object.keys(byLevel).map(Number).sort(function(a,b){return a-b;});
+  var levelY = 40;
+
+  for (var li = 0; li < levelKeys.length; li++) {
+    var lv = levelKeys[li];
+    var nodesInLevel = byLevel[lv];
+    var totalW = nodesInLevel.length * NODE_W + (nodesInLevel.length - 1) * NODE_GAP_X;
+    var startX = 40;
+    var maxH = 0;
+
+    for (var ni = 0; ni < nodesInLevel.length; ni++) {
+      var idx = nodesInLevel[ni];
+      var n = flow.nodes[idx];
+      n.layoutX = startX + ni * (NODE_W + NODE_GAP_X);
+      n.layoutY = levelY;
+      var h = nodeHeight(n);
+      if (h > maxH) maxH = h;
+    }
+    levelY += maxH + NODE_GAP_Y;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANVAS RENDERING
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderCanvas() {
+  var viewport = document.getElementById('canvasViewport');
+  var svg = document.getElementById('edgesSvg');
+
+  // Clear existing nodes (keep SVG)
+  var existing = viewport.querySelectorAll('.flow-node-card');
+  for (var i = 0; i < existing.length; i++) existing[i].remove();
+  while (svg.children.length > 1) svg.removeChild(svg.lastChild); // keep <defs>
+
+  // Render edges first (behind nodes)
+  renderEdges(svg);
+
+  // Render node cards
+  for (var i = 0; i < flow.nodes.length; i++) {
+    renderNodeCard(flow.nodes[i], viewport);
+  }
+
+  applyTransform();
+}
+
+function renderEdges(svg) {
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var node = flow.nodes[i];
+    var fromX = (node.layoutX || 0) + NODE_W / 2;
+    var fromY = (node.layoutY || 0) + estimateNodeHeight(node);
+
+    // Normal next edges
+    for (var j = 0; j < (node.next || []).length; j++) {
+      var ti = node.next[j].toIndex;
+      if (ti === undefined || ti === null) continue;
+      var target = flow.nodes[ti];
+      if (!target) continue;
+      drawEdge(svg, fromX, fromY, (target.layoutX || 0) + NODE_W / 2, target.layoutY || 0, {
+        kind: 'next', src: i, dst: ti, label: node.next[j].label || '', isAuto: false,
+      });
+    }
+
+    // Edge-case edges (auto-injected or manually tagged)
+    for (var j = 0; j < (node.edgeCases || []).length; j++) {
+      var ec = node.edgeCases[j];
+      if (ec.autoIdx === undefined || ec.autoIdx === null) continue;
+      var target = flow.nodes[ec.autoIdx];
+      if (!target) continue;
+      var ecLabels = { no_response:'⏰ no resp', wrong_answer:'❌ wrong', submission:'📥 sub', help:'🆘 help' };
+      drawEdge(svg, fromX, fromY, (target.layoutX || 0) + NODE_W / 2, target.layoutY || 0, {
+        kind: 'ec', src: i, dst: ec.autoIdx, label: ecLabels[ec.type] || ec.type,
+        isAuto: !!target.isAuto, ecType: ec.type,
+      });
+    }
+  }
+}
+
+function drawEdge(svg, x1, y1, x2, y2, opts) {
+  opts = opts || {};
+  var d = 'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + (y1 + 30) + ', ' + x2 + ' ' + (y2 - 30) + ', ' + x2 + ' ' + y2;
+
+  // invisible fat hit path (clickable)
+  var hit = document.createElementNS(SVGNS, 'path');
+  hit.setAttribute('d', d);
+  hit.setAttribute('class', 'edge-hit');
+  hit.setAttribute('data-src', opts.src);
+  hit.setAttribute('data-dst', opts.dst);
+  hit.setAttribute('data-kind', opts.kind);
+  hit.setAttribute('data-label', opts.label || '');
+  hit.setAttribute('data-ectype', opts.ecType || '');
+  hit.addEventListener('click', openEdgePopover);
+  svg.appendChild(hit);
+
+  // visible path (must be the immediate next sibling for hover effect)
+  var path = document.createElementNS(SVGNS, 'path');
+  path.setAttribute('d', d);
+  var cls = 'edge-path' + (opts.isAuto ? ' auto-gen' : '') + (opts.ecType ? ' ec-' + opts.ecType : '');
+  path.setAttribute('class', cls);
+  path.setAttribute('marker-end', opts.isAuto ? 'url(#arrowhead-auto)' : 'url(#arrowhead)');
+  svg.appendChild(path);
+
+  if (opts.label) {
+    var midX = (x1 + x2) / 2;
+    var midY = (y1 + y2) / 2;
+    var text = document.createElementNS(SVGNS, 'text');
+    text.setAttribute('x', midX);
+    text.setAttribute('y', midY);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '9');
+    text.setAttribute('fill', opts.isAuto ? '#94A3B8' : '#64748B');
+    text.setAttribute('font-family', '-apple-system, sans-serif');
+    text.setAttribute('pointer-events', 'none');
+    text.textContent = opts.label;
+    svg.appendChild(text);
+  }
+}
+
+function estimateNodeHeight(node) {
+  var h = 100;
+  if (node.imageData) h += 75;
+  if (node.buttons && node.buttons.length) h += node.buttons.length * 26;
+  return h;
+}
+
+function renderNodeCard(node, viewport) {
+  var card = document.createElement('div');
+  card.className = 'flow-node-card' + (node.isAuto ? '' : '');
+  card.id = 'node-card-' + node.index;
+  card.style.left = (node.layoutX || 0) + 'px';
+  card.style.top  = (node.layoutY || 0) + 'px';
+
+  var typeKey = node.isAuto ? node.autoType : (node.role ? node.role : (node.kind === 'cta' ? 'cta' : 'main_flow'));
+  var typeLabel = { main_flow:'Message', cta:'CTA', no_response:'No Response', wrong_answer:'Wrong Answer', submission:'Submission', help:'Help', message:'Message' };
+
+  var headerRight = node.isAuto
+    ? '<span class="node-type-label">' + (typeLabel[typeKey] || typeKey) + '</span><span class="auto-badge">auto</span>'
+    : '<select class="node-type-select" onchange="changeNodeType(' + node.index + ', this.value)">' +
+        '<option value="message"' + (node.kind !== 'cta' ? ' selected' : '') + '>Message</option>' +
+        '<option value="cta"' + (node.kind === 'cta' ? ' selected' : '') + '>CTA buttons</option>' +
+      '</select>';
+
+  card.innerHTML =
+    '<div class="node-color-bar bar-' + typeKey + '"></div>' +
+    '<div class="node-header">' +
+      '<div class="node-type-dot dot-' + typeKey + '"></div>' +
+      headerRight +
+      '<span class="node-idx">#' + (node.index + 1) + '</span>' +
+      '<button class="node-del-btn" title="Delete node" onclick="deleteNode(' + node.index + ')">🗑</button>' +
+    '</div>' +
+    '<div class="node-body" id="node-body-' + node.index + '">' +
+      buildNodeBody(node) +
+    '</div>' +
+    '<div class="node-footer">' +
+      '<button class="node-action-btn" onclick="addButtonToNode(' + node.index + ')">+ Button</button>' +
+      '<button class="node-action-btn" onclick="triggerImgUpload(' + node.index + ')">📎 Image</button>' +
+      '<input type="file" accept="image/*" class="node-img-upload" id="imgUpload-' + node.index + '" onchange="handleImgUpload(' + node.index + ', this)">' +
+    '</div>' +
+    '<div class="node-plug plug-in" data-node="' + node.index + '"></div>' +
+    '<div class="node-plug plug-out" data-node="' + node.index + '" title="Drag to connect" onmousedown="beginLink(event,' + node.index + ')"></div>';
+
+  // Drag to reposition
+  card.addEventListener('mousedown', function(e) {
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' ||
+        e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT' ||
+        e.target.classList.contains('node-plug')) return;
+    e.preventDefault();
+    canvas.draggingNode = node.index;
+    var rect = card.getBoundingClientRect();
+    var wrapRect = document.getElementById('canvasWrap').getBoundingClientRect();
+    canvas.dragOffsetX = (e.clientX - wrapRect.left - canvas.panX) / canvas.scale - (node.layoutX || 0);
+    canvas.dragOffsetY = (e.clientY - wrapRect.top  - canvas.panY) / canvas.scale - (node.layoutY || 0);
+    card.classList.add('dragging');
+  });
+
+  viewport.appendChild(card);
+}
+
+function buildNodeBody(node) {
+  var html = '';
+
+  // Image preview
+  if (node.imageData) {
+    html += '<div class="node-image-preview">' +
+      '<img src="' + node.imageData + '" alt="img">' +
+      '<button class="node-img-remove" onclick="removeNodeImage(' + node.index + ')">✕</button>' +
+    '</div>';
+  }
+
+  // Text area
+  html += '<textarea class="node-text-area" id="nodeText-' + node.index + '" ' +
+    'placeholder="Message text..." ' +
+    'oninput="updateNodeText(' + node.index + ', this.value)">' +
+    escHtml(node.text && node.text !== '[EMPTY]' ? node.text : '') +
+    '</textarea>';
+
+  // Buttons
+  if (node.buttons && node.buttons.length > 0) {
+    html += '<div class="node-btns" id="nodeBtns-' + node.index + '">';
+    for (var i = 0; i < node.buttons.length; i++) {
+      var btn = node.buttons[i];
+      var v = validateButtonLabel(btn);
+      var inputCls = v.lenErr ? ' invalid' : (v.fmt.length ? ' warn' : '');
+      var msgCls = v.lenErr ? ' err' : (v.fmt.length ? ' warn' : '');
+      var msgTxt = v.lenErr ? '⛔ Too long — max 20 (blocks the simulator)'
+                 : (v.fmt.length ? '⚠️ Not allowed in buttons: ' + v.fmt.join(', ') : '');
+      html += '<div class="node-btn-wrap">' +
+        '<div class="node-btn-row">' +
+          '<input class="node-btn-input' + inputCls + '" id="btnInput-' + node.index + '-' + i + '" type="text" maxlength="60" value="' + escAttr(btn) + '" ' +
+          'oninput="updateNodeBtn(' + node.index + ',' + i + ',this.value)">' +
+          '<span class="node-btn-char ' + (v.lenErr ? 'over' : '') + '" id="btnChar-' + node.index + '-' + i + '">' + btn.length + '/20</span>' +
+          '<button class="node-btn-remove" onclick="removeNodeBtn(' + node.index + ',' + i + ')">✕</button>' +
+        '</div>' +
+        '<div class="node-btn-msg' + msgCls + '" id="btnMsg-' + node.index + '-' + i + '">' + msgTxt + '</div>' +
+      '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Delay slider
+  var delay = node.delayMs !== undefined ? node.delayMs : 2000;
+  html += '<div class="node-delay">' +
+    '<div class="node-delay-label">' +
+      '<span>Send delay</span>' +
+      '<span class="node-delay-val" id="delayVal-' + node.index + '">' + formatDelay(delay) + '</span>' +
+    '</div>' +
+    '<input type="range" min="500" max="8000" step="250" value="' + delay + '" ' +
+    'oninput="updateNodeDelay(' + node.index + ', this.value)">' +
+  '</div>';
+
+  return html;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function formatDelay(ms) {
+  return ms >= 1000 ? (ms/1000).toFixed(1) + 's' : ms + 'ms';
+}
+
+// ── BUTTON VALIDATION (WhatsApp constraints) ──
+function btnHasEmoji(s) {
+  try { return /\p{Extended_Pictographic}/u.test(s); }
+  catch (e) { return /[\u2190-\u2BFF\u2600-\u27BF\uFE0F\u20E3]/.test(s); }
+}
+function btnHasMarkdown(s) { return /[*_~]/.test(s); }
+function btnTooLong(s) { return (s || '').length > 20; }
+
+// Returns { lenErr:bool, fmt:[...] } for one button label
+function validateButtonLabel(s) {
+  s = s || '';
+  var fmt = [];
+  if (btnHasEmoji(s)) fmt.push('emoji');
+  if (btnHasMarkdown(s)) fmt.push('markdown * _ ~');
+  return { lenErr: btnTooLong(s), fmt: fmt };
+}
+
+// Scan whole flow → list of length violations (the blocking ones)
+function collectLengthViolations() {
+  var out = [];
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var n = flow.nodes[i];
+    for (var j = 0; j < (n.buttons || []).length; j++) {
+      if (btnTooLong(n.buttons[j])) {
+        out.push({ idx: i, btn: j, len: n.buttons[j].length, text: n.buttons[j] });
+      }
+    }
+  }
+  return out;
+}
+
+function revalidateBtnRow(idx, i) {
+  var val = (flow.nodes[idx].buttons && flow.nodes[idx].buttons[i]) || '';
+  var v = validateButtonLabel(val);
+  var input = document.getElementById('btnInput-' + idx + '-' + i);
+  var charEl = document.getElementById('btnChar-' + idx + '-' + i);
+  var msgEl = document.getElementById('btnMsg-' + idx + '-' + i);
+  if (input) {
+    input.classList.remove('invalid', 'warn');
+    if (v.lenErr) input.classList.add('invalid');
+    else if (v.fmt.length) input.classList.add('warn');
+  }
+  if (charEl) {
+    charEl.textContent = val.length + '/20';
+    charEl.className = 'node-btn-char' + (v.lenErr ? ' over' : '');
+  }
+  if (msgEl) {
+    if (v.lenErr) { msgEl.className = 'node-btn-msg err'; msgEl.textContent = '⛔ Too long — max 20 (blocks the simulator)'; }
+    else if (v.fmt.length) { msgEl.className = 'node-btn-msg warn'; msgEl.textContent = '⚠️ Not allowed in buttons: ' + v.fmt.join(', '); }
+    else { msgEl.className = 'node-btn-msg'; msgEl.textContent = ''; }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NODE EDITING
+// ═══════════════════════════════════════════════════════════════════════════════
+function updateNodeText(idx, val) {
+  flow.nodes[idx].text = val;
+  redrawEdges();
+}
+
+function updateNodeBtn(idx, btnIdx, val) {
+  flow.nodes[idx].buttons[btnIdx] = val;
+  revalidateBtnRow(idx, btnIdx);
+}
+
+function updateNodeDelay(idx, val) {
+  flow.nodes[idx].delayMs = parseInt(val);
+  var el = document.getElementById('delayVal-' + idx);
+  if (el) el.textContent = formatDelay(parseInt(val));
+}
+
+function addButtonToNode(idx) {
+  var node = flow.nodes[idx];
+  if (!node.buttons) node.buttons = [];
+  if (node.buttons.length >= 3) { showToast('WhatsApp allows a maximum of 3 reply buttons per message.'); return; }
+  node.buttons.push('');
+  node.kind = 'cta';
+  // Ensure auto-nodes exist
+  injectAutoNodes();
+  rerenderCard(idx);
+  redrawEdges();
+}
+
+function removeNodeBtn(idx, btnIdx) {
+  flow.nodes[idx].buttons.splice(btnIdx, 1);
+  if (flow.nodes[idx].buttons.length === 0) flow.nodes[idx].kind = 'message';
+  rerenderCard(idx);
+  redrawEdges();
+}
+
+function removeNodeImage(idx) {
+  flow.nodes[idx].imageData = null;
+  rerenderNode(idx);
+  computeLayout();
+  renderCanvas();
+}
+
+function triggerImgUpload(idx) {
+  var el = document.getElementById('imgUpload-' + idx);
+  if (el) el.click();
+}
+
+function handleImgUpload(idx, input) {
+  var file = input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    flow.nodes[idx].imageData = e.target.result;
+    rerenderNode(idx);
+    computeLayout();
+    renderCanvas();
+  };
+  reader.readAsDataURL(file);
+}
+
+function rerenderNode(idx) {
+  var bodyEl = document.getElementById('node-body-' + idx);
+  if (bodyEl) bodyEl.innerHTML = buildNodeBody(flow.nodes[idx]);
+}
+
+// Full card re-render (keeps header type-select / color in sync)
+function rerenderCard(idx) {
+  var old = document.getElementById('node-card-' + idx);
+  if (old) old.remove();
+  renderNodeCard(flow.nodes[idx], document.getElementById('canvasViewport'));
+}
+
+function redrawEdges() {
+  var svg = document.getElementById('edgesSvg');
+  while (svg.children.length > 1) svg.removeChild(svg.lastChild);
+  renderEdges(svg);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MANUAL AUTHORING — create / delete nodes, connect / relabel / delete edges
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Create a new node ──
+function createNode() {
+  switchTab('editor');
+  var wrap = document.getElementById('canvasWrap');
+  var r = wrap.getBoundingClientRect();
+  var cx = (r.width / 2 - canvas.panX) / canvas.scale - NODE_W / 2;
+  var cy = (r.height / 2 - canvas.panY) / canvas.scale - 40;
+  var idx = createNodeAt(cx, cy);
+  selectNode(idx);
+  var ta = document.getElementById('nodeText-' + idx);
+  if (ta) ta.focus();
+}
+
+function createNodeAt(x, y) {
+  var idx = flow.nodes.length;
+  flow.nodes.push({
+    id: 'manual_' + Date.now() + '_' + idx, figmaId: null, index: idx,
+    layoutX: Math.max(0, x), layoutY: Math.max(0, y), x: x, y: y,
+    text: '', kind: 'message', isQuiz: false, quizResponses: [],
+    buttons: [], edgeCases: [], noResponseNext: null, next: [],
+    imageData: null, delayMs: 2000,
+  });
+  sims.full.totalSteps = flow.nodes.filter(function(n) { return n.kind !== 'delay'; }).length;
+  renderNodeCard(flow.nodes[idx], document.getElementById('canvasViewport'));
+  redrawEdges();
+  return idx;
+}
+
+// ── Change node type (Message ↔ CTA) ──
+function changeNodeType(idx, val) {
+  var n = flow.nodes[idx];
+  if (val === 'cta') {
+    n.kind = 'cta';
+    if (!n.buttons || n.buttons.length === 0) n.buttons = [''];
+    injectAutoNodes();
+  } else {
+    n.kind = 'message';
+    n.buttons = [];
+  }
+  renderCanvas();
+}
+
+// ── Delete a node and remap every index reference ──
+function deleteNode(delIdx) {
+  if (!flow.nodes[delIdx]) return;
+  closeEdgePopover();
+  flow.nodes.splice(delIdx, 1);
+
+  function mapIdx(old) {
+    if (old === delIdx) return null;
+    return old > delIdx ? old - 1 : old;
+  }
+
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var n = flow.nodes[i];
+    n.index = i;
+
+    var nn = [];
+    for (var j = 0; j < (n.next || []).length; j++) {
+      var m = mapIdx(n.next[j].toIndex);
+      if (m !== null) { n.next[j].toIndex = m; nn.push(n.next[j]); }
+    }
+    n.next = nn;
+
+    var ec = [];
+    for (var j = 0; j < (n.edgeCases || []).length; j++) {
+      var e = n.edgeCases[j];
+      if (e.autoIdx !== undefined && e.autoIdx !== null) {
+        var m = mapIdx(e.autoIdx);
+        if (m === null) continue;
+        e.autoIdx = m;
+      }
+      ec.push(e);
+    }
+    n.edgeCases = ec;
+
+    if (n.noResponseNext !== null && n.noResponseNext !== undefined) {
+      n.noResponseNext = mapIdx(n.noResponseNext);
+    }
+    if (n.autoParentIndex !== undefined && n.autoParentIndex !== null) {
+      n.autoParentIndex = mapIdx(n.autoParentIndex);
+    }
+  }
+
+  if (flow.startIndex === delIdx) flow.startIndex = 0;
+  else if (flow.startIndex > delIdx) flow.startIndex = flow.startIndex - 1;
+
+  sims.full.totalSteps = flow.nodes.filter(function(n) { return n.kind !== 'delay'; }).length;
+  renderCanvas();
+}
+
+// ── Connect: drag from a node's output plug ──
+function beginLink(e, fromIdx) {
+  e.preventDefault();
+  e.stopPropagation();
+  var card = document.getElementById('node-card-' + fromIdx);
+  var n = flow.nodes[fromIdx];
+  var x1 = (n.layoutX || 0) + NODE_W / 2;
+  var y1 = (n.layoutY || 0) + (card ? card.getBoundingClientRect().height / canvas.scale : estimateNodeHeight(n));
+  var svg = document.getElementById('edgesSvg');
+  var p = document.createElementNS(SVGNS, 'path');
+  p.setAttribute('class', 'edge-link-temp');
+  svg.appendChild(p);
+  canvas.linking = { from: fromIdx, x1: x1, y1: y1, path: p };
+  updateLinkTemp(e);
+}
+
+function updateLinkTemp(e) {
+  if (!canvas.linking) return;
+  var wrapRect = document.getElementById('canvasWrap').getBoundingClientRect();
+  var cx = (e.clientX - wrapRect.left - canvas.panX) / canvas.scale;
+  var cy = (e.clientY - wrapRect.top - canvas.panY) / canvas.scale;
+  var x1 = canvas.linking.x1, y1 = canvas.linking.y1;
+  var d = 'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + (y1 + 40) + ', ' + cx + ' ' + (cy - 40) + ', ' + cx + ' ' + cy;
+  canvas.linking.path.setAttribute('d', d);
+
+  // highlight node under cursor
+  var hoverCard = cardUnderPoint(e.clientX, e.clientY);
+  var prev = document.querySelectorAll('.flow-node-card.link-target');
+  for (var i = 0; i < prev.length; i++) prev[i].classList.remove('link-target');
+  if (hoverCard && hoverCard.id !== 'node-card-' + canvas.linking.from) hoverCard.classList.add('link-target');
+}
+
+function cardUnderPoint(clientX, clientY) {
+  var el = document.elementFromPoint(clientX, clientY);
+  while (el && el !== document.body) {
+    if (el.classList && el.classList.contains('flow-node-card')) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+function finishLink(e) {
+  var link = canvas.linking;
+  canvas.linking = null;
+  if (link && link.path) link.path.remove();
+  var hl = document.querySelectorAll('.flow-node-card.link-target');
+  for (var i = 0; i < hl.length; i++) hl[i].classList.remove('link-target');
+  if (!link) return;
+
+  var card = cardUnderPoint(e.clientX, e.clientY);
+  if (card) {
+    var dst = parseInt(card.id.replace('node-card-', ''), 10);
+    if (dst !== link.from && !isNaN(dst)) {
+      if (addNextEdge(link.from, dst)) redrawEdges();
+      else showToast('Those nodes are already connected.');
+    }
+    return;
+  }
+
+  // Dropped on empty canvas → create a node there and connect to it
+  var wrapRect = document.getElementById('canvasWrap').getBoundingClientRect();
+  var nx = (e.clientX - wrapRect.left - canvas.panX) / canvas.scale - NODE_W / 2;
+  var ny = (e.clientY - wrapRect.top - canvas.panY) / canvas.scale;
+  var newIdx = createNodeAt(nx, ny);
+  addNextEdge(link.from, newIdx);
+  redrawEdges();
+  selectNode(newIdx);
+  var ta = document.getElementById('nodeText-' + newIdx);
+  if (ta) ta.focus();
+}
+
+function addNextEdge(src, dst) {
+  var n = flow.nodes[src];
+  if (!n.next) n.next = [];
+  for (var i = 0; i < n.next.length; i++) if (n.next[i].toIndex === dst) return false;
+  for (var i = 0; i < (n.edgeCases || []).length; i++) if (n.edgeCases[i].autoIdx === dst) return false;
+  n.next.push({ toIndex: dst, label: '' });
+  return true;
+}
+
+// ── Edge popover: relabel / retype / delete ──
+function openEdgePopover(e) {
+  e.stopPropagation();
+  closeEdgePopover();
+  var hit = e.currentTarget;
+  var src = parseInt(hit.getAttribute('data-src'), 10);
+  var dst = parseInt(hit.getAttribute('data-dst'), 10);
+  var kind = hit.getAttribute('data-kind');
+  var label = hit.getAttribute('data-label') || '';
+  var ecType = hit.getAttribute('data-ectype') || '';
+  var curType = kind === 'ec' ? ecType : 'normal';
+
+  var pop = document.createElement('div');
+  pop.className = 'edge-popover';
+  pop.id = 'edgePopover';
+  pop.innerHTML =
+    '<label>Branch type</label>' +
+    '<select id="epType">' +
+      '<option value="normal">Continue (normal)</option>' +
+      '<option value="no_response">⏰ No response</option>' +
+      '<option value="wrong_answer">❌ Wrong answer</option>' +
+      '<option value="submission">📥 Submission</option>' +
+      '<option value="help">🆘 Help</option>' +
+    '</select>' +
+    '<div id="epLabelWrap"><label>Label (for branch matching / CTA)</label>' +
+    '<input id="epLabel" type="text" placeholder="e.g. Yes, Start, Option A" value="' + escAttr(label) + '"></div>' +
+    '<div class="ep-row">' +
+      '<button class="ep-del" id="epDel">Delete</button>' +
+      '<button class="ep-close" id="epSave">Save</button>' +
+    '</div>';
+  document.body.appendChild(pop);
+
+  document.getElementById('epType').value = curType;
+  toggleEpLabel(curType);
+  document.getElementById('epType').onchange = function() { toggleEpLabel(this.value); };
+  document.getElementById('epDel').onclick = function() { deleteEdge(src, dst, kind); closeEdgePopover(); };
+  document.getElementById('epSave').onclick = function() {
+    var t = document.getElementById('epType').value;
+    var lbl = document.getElementById('epLabel').value;
+    setEdgeType(src, dst, t, lbl);
+    closeEdgePopover();
+  };
+
+  // position near the click, clamped to viewport
+  var px = Math.min(e.clientX + 6, window.innerWidth - pop.offsetWidth - 8);
+  var py = Math.min(e.clientY + 6, window.innerHeight - pop.offsetHeight - 8);
+  pop.style.left = Math.max(8, px) + 'px';
+  pop.style.top = Math.max(8, py) + 'px';
+
+  setTimeout(function() { document.addEventListener('mousedown', edgePopoverOutside); }, 0);
+}
+
+function toggleEpLabel(type) {
+  var w = document.getElementById('epLabelWrap');
+  if (w) w.style.display = type === 'normal' ? 'block' : 'none';
+}
+
+function edgePopoverOutside(e) {
+  var pop = document.getElementById('edgePopover');
+  if (pop && !pop.contains(e.target)) closeEdgePopover();
+}
+
+function closeEdgePopover() {
+  var pop = document.getElementById('edgePopover');
+  if (pop) pop.remove();
+  document.removeEventListener('mousedown', edgePopoverOutside);
+}
+
+function deleteEdge(src, dst, kind) {
+  var n = flow.nodes[src];
+  if (!n) return;
+  if (kind === 'ec') {
+    n.edgeCases = (n.edgeCases || []).filter(function(x) { return x.autoIdx !== dst; });
+    if (flow.nodes[dst]) delete flow.nodes[dst].role;
+  } else {
+    n.next = (n.next || []).filter(function(x) { return x.toIndex !== dst; });
+  }
+  redrawEdges();
+}
+
+function setEdgeType(src, dst, newType, newLabel) {
+  var n = flow.nodes[src];
+  if (!n) return;
+  // remove any existing reference to dst from both collections
+  n.next = (n.next || []).filter(function(x) { return x.toIndex !== dst; });
+  n.edgeCases = (n.edgeCases || []).filter(function(x) { return x.autoIdx !== dst; });
+
+  if (newType === 'normal') {
+    n.next.push({ toIndex: dst, label: newLabel || '' });
+    if (flow.nodes[dst]) delete flow.nodes[dst].role;
+  } else {
+    var tgt = flow.nodes[dst];
+    n.edgeCases.push({
+      id: n.id + '_ec_' + newType + '_' + dst,
+      nodeId: tgt ? tgt.id : null,
+      type: newType,
+      trigger: { type: newType },
+      text: (tgt && tgt.text && tgt.text !== '[EMPTY]') ? tgt.text : '',
+      autoIdx: dst,
+    });
+    if (tgt) tgt.role = newType;
+  }
+  renderCanvas();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANVAS PAN / ZOOM / DRAG
+// ═══════════════════════════════════════════════════════════════════════════════
+function applyTransform() {
+  var vp = document.getElementById('canvasViewport');
+  vp.style.transform = 'translate(' + canvas.panX + 'px,' + canvas.panY + 'px) scale(' + canvas.scale + ')';
+  document.getElementById('zoomIndicator').textContent = Math.round(canvas.scale * 100) + '%';
+}
+
+var canvasWrap = document.getElementById('canvasWrap');
+
+canvasWrap.addEventListener('mousedown', function(e) {
+  if (e.target !== canvasWrap && e.target !== document.getElementById('canvasViewport') && e.target !== document.getElementById('edgesSvg')) return;
+  canvas.isPanning = true;
+  canvas.lastMouseX = e.clientX;
+  canvas.lastMouseY = e.clientY;
+  canvasWrap.classList.add('panning');
+});
+
+document.addEventListener('mousemove', function(e) {
+  if (canvas.linking) { updateLinkTemp(e); return; }
+  if (canvas.draggingNode !== null) {
+    var wrapRect = canvasWrap.getBoundingClientRect();
+    var nx = (e.clientX - wrapRect.left - canvas.panX) / canvas.scale - canvas.dragOffsetX;
+    var ny = (e.clientY - wrapRect.top  - canvas.panY) / canvas.scale - canvas.dragOffsetY;
+    flow.nodes[canvas.draggingNode].layoutX = Math.max(0, nx);
+    flow.nodes[canvas.draggingNode].layoutY = Math.max(0, ny);
+    var card = document.getElementById('node-card-' + canvas.draggingNode);
+    if (card) { card.style.left = flow.nodes[canvas.draggingNode].layoutX + 'px'; card.style.top = flow.nodes[canvas.draggingNode].layoutY + 'px'; }
+    redrawEdges();
+    return;
+  }
+  if (!canvas.isPanning) return;
+  canvas.panX += e.clientX - canvas.lastMouseX;
+  canvas.panY += e.clientY - canvas.lastMouseY;
+  canvas.lastMouseX = e.clientX;
+  canvas.lastMouseY = e.clientY;
+  applyTransform();
+});
+
+document.addEventListener('mouseup', function(e) {
+  if (canvas.linking) { finishLink(e); return; }
+  if (canvas.draggingNode !== null) {
+    var card = document.getElementById('node-card-' + canvas.draggingNode);
+    if (card) card.classList.remove('dragging');
+    canvas.draggingNode = null;
+  }
+  canvas.isPanning = false;
+  canvasWrap.classList.remove('panning');
+});
+
+canvasWrap.addEventListener('wheel', function(e) {
+  e.preventDefault();
+  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+  var newScale = Math.min(Math.max(canvas.scale * delta, 0.2), 3);
+  var rect = canvasWrap.getBoundingClientRect();
+  var mouseX = e.clientX - rect.left;
+  var mouseY = e.clientY - rect.top;
+  canvas.panX = mouseX - (mouseX - canvas.panX) * (newScale / canvas.scale);
+  canvas.panY = mouseY - (mouseY - canvas.panY) * (newScale / canvas.scale);
+  canvas.scale = newScale;
+  applyTransform();
+}, { passive: false });
+
+function zoomIn()  { canvas.scale = Math.min(canvas.scale * 1.2, 3); applyTransform(); }
+function zoomOut() { canvas.scale = Math.max(canvas.scale * 0.8, 0.2); applyTransform(); }
+
+function fitCanvas() {
+  if (flow.nodes.length === 0) return;
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (var i = 0; i < flow.nodes.length; i++) {
+    var n = flow.nodes[i];
+    var x = n.layoutX || 0, y = n.layoutY || 0;
+    if (x < minX) minX = x; if (y < minY) minY = y;
+    if (x + NODE_W > maxX) maxX = x + NODE_W;
+    if (y + 150 > maxY) maxY = y + 150;
+  }
+  var wrapRect = canvasWrap.getBoundingClientRect();
+  var contentW = maxX - minX + 80, contentH = maxY - minY + 80;
+  var scaleX = wrapRect.width / contentW, scaleY = wrapRect.height / contentH;
+  canvas.scale = Math.min(scaleX, scaleY, 1.5);
+  canvas.panX = (wrapRect.width  - contentW * canvas.scale) / 2 - minX * canvas.scale + 40;
+  canvas.panY = (wrapRect.height - contentH * canvas.scale) / 2 - minY * canvas.scale + 40;
+  applyTransform();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIMULATOR ENGINE (shared between panel and full)
+// ═══════════════════════════════════════════════════════════════════════════════
+function chatAreaId(instance) { return instance === 'panel' ? 'panelChatArea' : 'fullChatArea'; }
+function statusId(instance)   { return instance === 'panel' ? 'panelWaStatus'  : 'fullWaStatus'; }
+function progressFillId(i)    { return i === 'panel' ? 'panelProgressFill' : 'fullProgressFill'; }
+function progressLabelId(i)   { return i === 'panel' ? 'panelProgressLabel' : 'fullProgressLabel'; }
+function msgInputId(i)        { return i === 'panel' ? 'panelMsgInput' : 'fullMsgInput'; }
+function sendBtnId(i)         { return i === 'panel' ? 'panelSendBtn'  : 'fullSendBtn'; }
+
+function restartSim(instance) {
+  var s = sims[instance];
+  clearSimTimers(s);
+  s.currentIndex = flow.startIndex !== undefined ? flow.startIndex : 0;
+  s.history = []; s.waitingForInput = false;
+  document.getElementById(chatAreaId(instance)).innerHTML = '';
+  document.getElementById(msgInputId(instance)).value = '';
+  enableInput(instance, false);
+  updateProgress(instance);
+  if (flow.nodes.length > 0) {
+    setTimeout(function() { playNode(instance, s.currentIndex); }, 800);
+  }
+}
+
+function clearSimTimers(s) {
+  if (s.timeoutTimer) { clearInterval(s.timeoutTimer); s.timeoutTimer = null; }
+  if (s.delayTimer)   { clearTimeout(s.delayTimer); s.delayTimer = null; }
+}
+
+function playNode(instance, index) {
+  if (index === null || index === undefined) {
+    appendSystem(instance, '⚠ playNode called with null index');
+    return;
+  }
+  if (index < 0 || index >= flow.nodes.length) {
+    appendSystem(instance, '⚠ playNode index ' + index + ' out of range (have ' + flow.nodes.length + ' nodes)');
+    return;
+  }
+  var s = sims[instance];
+  clearSimTimers(s);
+  s.currentIndex = index;
+  s.waitingForInput = false;
+  enableInput(instance, false);
+
+  var node = flow.nodes[index];
+  s.history.push(index);
+  updateProgress(instance);
+
+  // Use node's own delay if set, else scale with text length
+  var nodeDelay = node.delayMs !== undefined ? node.delayMs : null;
+  var typingMs = nodeDelay !== null ? Math.min(nodeDelay, 4000) : (1200 + Math.min((node.text || '').length * 22, 2600));
+
+  // Capture node and s in closure to avoid stale references
+  (function(capturedNode, capturedS) {
+    showTyping(instance, typingMs, function() {
+      if (capturedNode.imageData) appendImageBubble(instance, capturedNode.imageData);
+      if (capturedNode.text && capturedNode.text !== '[EMPTY]' && capturedNode.text !== '') {
+        appendBubble(instance, capturedNode.text, 'recv');
+      }
+
+      if (capturedNode.kind === 'cta' && capturedNode.buttons && capturedNode.buttons.length > 0) {
+        appendCTAButtons(instance, capturedNode);
+        // CTA: flow advances via button tap — input stays disabled
+        enableInput(instance, false);
+        return;
+      }
+
+      // Message node — check for no-response edge case timer
+      var noRespEc = null;
+      for (var i = 0; i < (capturedNode.edgeCases || []).length; i++) {
+        if (capturedNode.edgeCases[i].type === 'no_response') { noRespEc = capturedNode.edgeCases[i]; break; }
+      }
+      if (noRespEc) {
+        var realHours = (noRespEc.trigger && noRespEc.trigger.after_hours) || 2;
+        var simSecs = Math.min(realHours * 10, 60);
+        startTimeoutBar(instance, capturedNode, simSecs, noRespEc);
+      }
+
+      // Auto-advance for message nodes
+      if (capturedNode.next && capturedNode.next.length >= 1) {
+        var gap = 1800 + Math.floor(Math.random() * 1200);
+        var nextIdx = capturedNode.next[0].toIndex;
+        capturedS.delayTimer = setTimeout(function() { playNode(instance, nextIdx); }, gap);
+      } else {
+        setTimeout(function() { appendSystem(instance, '✅ End of flow'); }, 1500);
+        document.getElementById(statusId(instance)).textContent = 'Flow complete';
+      }
+    });
+  })(node, s);
+}
+
+function showTyping(instance, ms, cb) {
+  var area = document.getElementById(chatAreaId(instance));
+  var el = document.createElement('div');
+  el.className = 'typing-indicator';
+  el.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+  area.appendChild(el);
+  scrollChat(instance);
+  document.getElementById(statusId(instance)).textContent = 'typing...';
+  var s = sims[instance];
+  s.delayTimer = setTimeout(function() {
+    el.remove();
+    document.getElementById(statusId(instance)).textContent = 'Online';
+    cb();
+  }, ms);
+}
+
+function skipDelay(instance) {
+  var s = sims[instance];
+  clearSimTimers(s);
+  var area = document.getElementById(chatAreaId(instance));
+  var indicators = area.querySelectorAll('.typing-indicator');
+  for (var i = 0; i < indicators.length; i++) indicators[i].remove();
+  document.getElementById(statusId(instance)).textContent = 'Online';
+  var node = flow.nodes[s.currentIndex];
+  if (!node) return;
+  if (node.next && node.next.length === 1) playNode(instance, node.next[0].toIndex);
+}
+
+function triggerEdgeCase(type, instance) {
+  var s = sims[instance];
+  var node = flow.nodes[s.currentIndex];
+  if (!node) return;
+  var ec = null;
+  for (var i = 0; i < (node.edgeCases || []).length; i++) {
+    if (node.edgeCases[i].type === type) { ec = node.edgeCases[i]; break; }
+  }
+  if (!ec) { appendSystem(instance, '⚠️ No "' + type + '" branch here'); return; }
+  clearSimTimers(s);
+  var area = document.getElementById(chatAreaId(instance));
+  area.querySelectorAll('.timeout-bar').forEach(function(el) { el.remove(); });
+  area.querySelectorAll('.cta-container button').forEach(function(b) { b.disabled = true; });
+  appendSystem(instance, { no_response:'⏰ No response', wrong_answer:'❌ Wrong answer', submission:'📥 Submission', help:'🆘 Help' }[type] || type);
+  if (ec.text && ec.text !== '[EMPTY]') {
+    var textForTyping = ec.text;
+    showTyping(instance, 1400, function() {
+      appendBubble(instance, textForTyping, 'recv');
+      var targetIdx = ec.autoIdx !== undefined ? null : null; // auto nodes don't advance
+      if (node.next && node.next.length > 0) {
+        setTimeout(function() { playNode(instance, node.next[0].toIndex); }, 2000);
+      }
+    });
+  } else if (node.next && node.next.length > 0) {
+    setTimeout(function() { playNode(instance, node.next[0].toIndex); }, 1500);
+  }
+}
+
+var FOLD_LINES = 4; // WhatsApp collapses message bodies past ~4 lines on standard mobile viewports
+
+function appendBubble(instance, text, dir) {
+  var area = document.getElementById(chatAreaId(instance));
+  var wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap ' + dir;
+
+  var bubble = document.createElement('div');
+  bubble.className = 'bubble ' + dir;
+  var span = document.createElement('span');
+  span.className = 'bubble-text';
+  span.textContent = text;
+  span.setAttribute('data-fulltext', text);
+  bubble.appendChild(span);
+
+  var time = document.createElement('div');
+  time.className = 'bubble-time';
+  time.textContent = currentTime() + (dir === 'sent' ? ' ✓✓' : '');
+
+  wrap.appendChild(bubble);
+  wrap.appendChild(time);
+  area.appendChild(wrap);
+
+  applyFoldToBubble(wrap, instance);
+  scrollChat(instance);
+}
+
+// Measure real wrapped lines at the phone's fixed width and flag messages that
+// run past WhatsApp's "Read more" fold. Text is shown in full (no collapsing).
+// Measurement only works when the phone is on-screen, so defer when hidden.
+function applyFoldToBubble(wrap, instance) {
+  var span = wrap.querySelector('.bubble-text');
+  if (!span) return;
+  if (wrap.getAttribute('data-folded') === '1') return;
+  if (span.offsetParent === null || span.scrollHeight === 0) {
+    wrap.setAttribute('data-foldpending', '1');
+    return;
+  }
+  wrap.removeAttribute('data-foldpending');
+
+  var text = span.getAttribute('data-fulltext') || span.textContent;
+  var cs = getComputedStyle(span);
+  var lh = parseFloat(cs.lineHeight);
+  if (!lh || isNaN(lh)) lh = parseFloat(cs.fontSize) * 1.4;
+  var totalLines = Math.round(span.scrollHeight / lh);
+  if (totalLines <= FOLD_LINES) return;
+
+  wrap.setAttribute('data-folded', '1');
+  var warn = document.createElement('div');
+  warn.className = 'fold-warning';
+  warn.textContent = '⚠️ Exceeds WhatsApp’s “Read more” fold on standard mobile viewports ('
+    + totalLines + ' lines, ' + countWords(text) + ' words).';
+  wrap.appendChild(warn);
+}
+
+// Re-measure any bubbles that were appended while the phone was hidden
+function relayoutFolds(instance) {
+  var area = document.getElementById(chatAreaId(instance));
+  if (!area) return;
+  var pend = area.querySelectorAll('.bubble-wrap[data-foldpending="1"]');
+  for (var i = 0; i < pend.length; i++) applyFoldToBubble(pend[i], instance);
+}
+
+function countWords(s) {
+  var m = String(s).trim().match(/\S+/g);
+  return m ? m.length : 0;
+}
+
+function appendImageBubble(instance, base64) {
+  var area = document.getElementById(chatAreaId(instance));
+  var wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap recv';
+  var imgWrap = document.createElement('div');
+  imgWrap.className = 'image-bubble';
+  var img = document.createElement('img');
+  img.src = base64;
+  img.alt = 'image';
+  imgWrap.appendChild(img);
+  var time = document.createElement('div');
+  time.className = 'bubble-time';
+  time.textContent = currentTime();
+  wrap.appendChild(imgWrap);
+  wrap.appendChild(time);
+  area.appendChild(wrap);
+  scrollChat(instance);
+}
+
+function appendSystem(instance, text) {
+  var area = document.getElementById(chatAreaId(instance));
+  var el = document.createElement('div');
+  el.style.cssText = 'text-align:center;font-size:9px;color:var(--muted);padding:4px 0;';
+  el.textContent = text;
+  area.appendChild(el);
+  scrollChat(instance);
+}
+
+function appendCTAButtons(instance, node) {
+  var area = document.getElementById(chatAreaId(instance));
+
+  // Quiz mode — unchanged
+  if (node.isQuiz) {
+    var container = document.createElement('div');
+    container.className = 'cta-container';
+    var badge = document.createElement('div');
+    badge.style.cssText = 'text-align:center;font-size:9px;color:var(--muted);padding:1px 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;';
+    badge.textContent = '🧠 Quiz';
+    container.appendChild(badge);
+    for (var i = 0; i < node.buttons.length; i++) {
+      (function(btnText) {
+        var btn = document.createElement('button');
+        btn.className = 'cta-btn';
+        var label = btnText.length > 20 ? btnText.slice(0, 20) : btnText;
+        btn.textContent = label;
+        btn.onclick = function() {
+          disableCTAContainer(container);
+          appendBubble(instance, label, 'sent');
+          clearSimTimers(sims[instance]);
+          area.querySelectorAll('.timeout-bar').forEach(function(el) { el.remove(); });
+          playQuizResponses(instance, node.quizResponses, 0, function() {
+            var target = node.next && node.next.length > 0 ? node.next[0].toIndex : null;
+            if (target !== null) setTimeout(function() { playNode(instance, target); }, 1500);
+            else appendSystem(instance, '✅ End of flow');
+          });
+        };
+        container.appendChild(btn);
+      })(node.buttons[i]);
+    }
+    area.appendChild(container);
+    scrollChat(instance);
+    return;
+  }
+
+  // Normal CTA — render each button with a 3-option tester below it
+  var wrapper = document.createElement('div');
+  wrapper.className = 'cta-container';
+
+  for (var i = 0; i < node.buttons.length; i++) {
+    (function(btnText, btnIdx) {
+      var label = btnText.length > 20 ? btnText.slice(0, 20) : btnText;
+
+      // The WA-style button
+      var btn = document.createElement('button');
+      btn.className = 'cta-btn';
+      btn.textContent = label;
+
+      // The tester panel (shown after tapping the button)
+      var tester = document.createElement('div');
+      tester.className = 'cta-tester';
+      tester.style.display = 'none';
+
+      var testerLabel = document.createElement('div');
+      testerLabel.className = 'cta-tester-label';
+      testerLabel.textContent = '"' + label + '" — what happens next?';
+      tester.appendChild(testerLabel);
+
+      // Find edge cases for this node
+      var noRespEc = null, wrongEc = null;
+      for (var j = 0; j < (node.edgeCases || []).length; j++) {
+        if (node.edgeCases[j].type === 'no_response' && !noRespEc) noRespEc = node.edgeCases[j];
+        if (node.edgeCases[j].type === 'wrong_answer' && !wrongEc) wrongEc = node.edgeCases[j];
+      }
+
+      // Find next target for this button
+      var target = null;
+      if (node.next && node.next.length > 0) {
+        for (var j = 0; j < node.next.length; j++) {
+          if (node.next[j].label && label.toLowerCase().includes(node.next[j].label.toLowerCase())) {
+            target = node.next[j].toIndex; break;
+          }
+        }
+        if (target === null) target = node.next[btnIdx] ? node.next[btnIdx].toIndex : node.next[0].toIndex;
+      }
+
+      // ① Continue flow
+      var continueRow = document.createElement('div');
+      continueRow.className = 'cta-tester-row';
+      var continueBtn = document.createElement('button');
+      continueBtn.className = 'cta-tester-btn continue';
+      continueBtn.innerHTML = '<span class="cta-tester-icon">▶</span> Continue flow';
+      continueBtn.onclick = function() {
+        disableTester(tester);
+        clearSimTimers(sims[instance]);
+        area.querySelectorAll('.timeout-bar').forEach(function(el) { el.remove(); });
+        if (target !== null && target !== undefined) {
+          setTimeout(function() { playNode(instance, target); }, 1000 + Math.floor(Math.random() * 600));
+        } else {
+          appendSystem(instance, '✅ End of flow');
+        }
+      };
+      continueRow.appendChild(continueBtn);
+      tester.appendChild(continueRow);
+
+      // ② No response
+      var noRespRow = document.createElement('div');
+      noRespRow.className = 'cta-tester-row';
+      var noRespBtn = document.createElement('button');
+      noRespBtn.className = 'cta-tester-btn no-resp';
+      noRespBtn.innerHTML = '<span class="cta-tester-icon">⏰</span> No response' + (noRespEc ? '' : ' (not set)');
+      if (!noRespEc) noRespBtn.disabled = true;
+      noRespBtn.onclick = function() {
+        // Show the no-response message, then offer to continue
+        var ecText = noRespEc ? noRespEc.text : null;
+        appendSystem(instance, '⏰ No response scenario');
+        if (ecText && ecText !== '[EMPTY]') {
+          showTyping(instance, 1200 + Math.min(ecText.length * 15, 1500), function() {
+            appendBubble(instance, ecText, 'recv');
+            // Re-enable just the Continue button so flow can resume
+            var allTesterBtns = tester.querySelectorAll('.cta-tester-btn');
+            for (var k = 0; k < allTesterBtns.length; k++) {
+              if (allTesterBtns[k].classList.contains('continue')) {
+                allTesterBtns[k].disabled = false;
+              }
+            }
+          });
+        } else {
+          appendSystem(instance, '(No message defined for this edge case)');
+          var allTesterBtns = tester.querySelectorAll('.cta-tester-btn');
+          for (var k = 0; k < allTesterBtns.length; k++) {
+            if (allTesterBtns[k].classList.contains('continue')) allTesterBtns[k].disabled = false;
+          }
+        }
+        noRespBtn.disabled = true;
+      };
+      noRespRow.appendChild(noRespBtn);
+      tester.appendChild(noRespRow);
+
+      // ③ Wrong answer
+      var wrongRow = document.createElement('div');
+      wrongRow.className = 'cta-tester-row';
+      var wrongBtn = document.createElement('button');
+      wrongBtn.className = 'cta-tester-btn wrong';
+      wrongBtn.innerHTML = '<span class="cta-tester-icon">❌</span> Wrong answer' + (wrongEc ? '' : ' (not set)');
+      if (!wrongEc) wrongBtn.disabled = true;
+      wrongBtn.onclick = function() {
+        var ecText = wrongEc ? wrongEc.text : null;
+        appendSystem(instance, '❌ Wrong answer scenario');
+        if (ecText && ecText !== '[EMPTY]') {
+          showTyping(instance, 1200 + Math.min(ecText.length * 15, 1500), function() {
+            appendBubble(instance, ecText, 'recv');
+            var allTesterBtns = tester.querySelectorAll('.cta-tester-btn');
+            for (var k = 0; k < allTesterBtns.length; k++) {
+              if (allTesterBtns[k].classList.contains('continue')) allTesterBtns[k].disabled = false;
+            }
+          });
+        } else {
+          appendSystem(instance, '(No message defined for this edge case)');
+          var allTesterBtns = tester.querySelectorAll('.cta-tester-btn');
+          for (var k = 0; k < allTesterBtns.length; k++) {
+            if (allTesterBtns[k].classList.contains('continue')) allTesterBtns[k].disabled = false;
+          }
+        }
+        wrongBtn.disabled = true;
+      };
+      wrongRow.appendChild(wrongBtn);
+      tester.appendChild(wrongRow);
+
+      // Tap the WA button → send bubble + show tester
+      btn.onclick = function() {
+        btn.disabled = true;
+        // Disable all other CTA buttons in this node
+        var allCtaBtns = wrapper.querySelectorAll('.cta-btn');
+        for (var k = 0; k < allCtaBtns.length; k++) allCtaBtns[k].disabled = true;
+
+        appendBubble(instance, label, 'sent');
+        clearSimTimers(sims[instance]);
+        area.querySelectorAll('.timeout-bar').forEach(function(el) { el.remove(); });
+        tester.style.display = 'block';
+        scrollChat(instance);
+      };
+
+      wrapper.appendChild(btn);
+      wrapper.appendChild(tester);
+    })(node.buttons[i], i);
+  }
+
+  area.appendChild(wrapper);
+  scrollChat(instance);
+}
+
+function disableCTAContainer(container) {
+  var btns = container.querySelectorAll('.cta-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+}
+
+function disableTester(tester) {
+  var btns = tester.querySelectorAll('.cta-tester-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+}
+
+function playQuizResponses(instance, responses, idx, onDone) {
+  if (idx >= responses.length) { onDone(); return; }
+  var text = responses[idx];
+  showTyping(instance, 1000 + Math.min(text.length * 18, 1800), function() {
+    appendBubble(instance, text, 'recv');
+    setTimeout(function() { playQuizResponses(instance, responses, idx + 1, onDone); }, 1000 + Math.floor(Math.random() * 600));
+  });
+}
+
+function startTimeoutBar(instance, node, secs, ec) {
+  var s = sims[instance];
+  var area = document.getElementById(chatAreaId(instance));
+  var hint = ec && ec.trigger && ec.trigger.after_hours ? ' (' + ec.trigger.after_hours + 'hr real)' : '';
+  var remaining = secs;
+
+  var bar = document.createElement('div');
+  bar.className = 'timeout-bar';
+  var fillId = 'tFill-' + instance + '-' + Date.now();
+  var countId = 'tCount-' + instance + '-' + Date.now();
+  bar.innerHTML = '<div class="timeout-label"><span>No response' + hint + '</span><span class="timeout-countdown" id="' + countId + '">' + secs + 's</span></div>' +
+    '<div class="timeout-track"><div class="timeout-fill" id="' + fillId + '" style="width:100%"></div></div>';
+  area.appendChild(bar);
+  scrollChat(instance);
+
+  s.timeoutTimer = setInterval(function() {
+    remaining--;
+    var countEl = document.getElementById(countId);
+    var fillEl  = document.getElementById(fillId);
+    if (countEl) countEl.textContent = remaining + 's';
+    if (fillEl)  fillEl.style.width = ((remaining / secs) * 100) + '%';
+    if (remaining <= 0) {
+      clearInterval(s.timeoutTimer); s.timeoutTimer = null;
+      bar.remove();
+      if (ec && ec.text && ec.text !== '[EMPTY]') {
+        appendSystem(instance, '⏰ Timeout — sending reminder');
+        var ecText = ec.text;
+        showTyping(instance, 1400, function() {
+          appendBubble(instance, ecText, 'recv');
+          if (node.next && node.next.length > 0) {
+            setTimeout(function() { playNode(instance, node.next[0].toIndex); }, 2000);
+          }
+        });
+      } else if (node.next && node.next.length > 0) {
+        appendSystem(instance, '⏰ Timeout — continuing');
+        setTimeout(function() { playNode(instance, node.next[0].toIndex); }, 1500);
+      }
+    }
+  }, 1000);
+}
+
+function sendUserMessage(instance) {
+  var input = document.getElementById(msgInputId(instance));
+  var text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  appendBubble(instance, text, 'sent');
+  clearSimTimers(sims[instance]);
+  document.getElementById(chatAreaId(instance)).querySelectorAll('.timeout-bar').forEach(function(el) { el.remove(); });
+  var node = flow.nodes[sims[instance].currentIndex];
+  if (!node) return;
+  var match = null;
+  for (var j = 0; j < (node.next || []).length; j++) {
+    if (node.next[j].label && text.toLowerCase().includes(node.next[j].label.toLowerCase())) {
+      match = node.next[j].toIndex; break;
+    }
+  }
+  var target = match !== null ? match : (node.next && node.next.length > 0 ? node.next[0].toIndex : null);
+  if (target !== null && target !== undefined) {
+    setTimeout(function() { playNode(instance, target); }, 1200 + Math.floor(Math.random() * 800));
+  } else {
+    appendSystem(instance, '✅ End of flow');
+  }
+  enableInput(instance, false);
+}
+
+document.getElementById('fullMsgInput').addEventListener('keydown',  function(e) { if (e.key === 'Enter') sendUserMessage('full'); });
+
+function enableInput(instance, enabled) {
+  document.getElementById(msgInputId(instance)).disabled = !enabled;
+  document.getElementById(sendBtnId(instance)).disabled  = !enabled;
+}
+
+function updateProgress(instance) {
+  var s = sims[instance];
+  var visited = s.history.length;
+  var total = s.totalSteps || flow.nodes.length;
+  var pct = total > 0 ? Math.min((visited / total) * 100, 100) : 0;
+  document.getElementById(progressFillId(instance)).style.width = pct + '%';
+  document.getElementById(progressLabelId(instance)).textContent = visited + '/' + total;
+}
+
+function scrollChat(instance) {
+  var area = document.getElementById(chatAreaId(instance));
+  setTimeout(function() { area.scrollTop = area.scrollHeight; }, 50);
+}
+
+function currentTime() {
+  var d = new Date();
+  return d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+function runSimulator() {
+  if (!simulatorGateOk()) return;
+  switchTab('simulator');
+  restartSim('full');
+}
+
+// Block entering the simulator while any button label exceeds 20 chars
+function simulatorGateOk() {
+  var bad = collectLengthViolations();
+  if (bad.length === 0) return true;
+  var first = bad[0];
+  showToast('⛔ ' + bad.length + ' button label' + (bad.length > 1 ? 's' : '') +
+    ' over 20 characters — fix to run the simulator. (Node #' + (first.idx + 1) + ')');
+  switchTab('editor');
+  selectNode(first.idx);
+  focusNode(first.idx);
+  return false;
+}
+
+function selectNode(idx) {
+  var sel = document.querySelectorAll('.flow-node-card.selected');
+  for (var i = 0; i < sel.length; i++) sel[i].classList.remove('selected');
+  var card = document.getElementById('node-card-' + idx);
+  if (card) card.classList.add('selected');
+}
+
+function focusNode(idx) {
+  var n = flow.nodes[idx];
+  if (!n) return;
+  var wrap = document.getElementById('canvasWrap');
+  var r = wrap.getBoundingClientRect();
+  if (canvas.scale < 0.8) canvas.scale = 0.8;
+  canvas.panX = r.width / 2 - (n.layoutX + NODE_W / 2) * canvas.scale;
+  canvas.panY = r.height / 2 - (n.layoutY + 60) * canvas.scale;
+  applyTransform();
+}
+
+var _toastTimer = null;
+function showToast(msg) {
+  var t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.className = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.add('show');
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(function() { t.classList.remove('show'); }, 4200);
+}
+
+function switchTab(name) {
+  var tabs = document.querySelectorAll('.tab');
+  for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+  var panels = document.querySelectorAll('.tab-panel');
+  for (var i = 0; i < panels.length; i++) panels[i].classList.remove('active');
+  var tabEl = document.querySelector('[data-tab="' + name + '"]');
+  if (tabEl) tabEl.classList.add('active');
+  var panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.add('active');
+  if (name === 'simulator') setTimeout(function() { relayoutFolds('full'); }, 0);
+}
+
+// ── TABS ──
+document.querySelectorAll('.tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    if (tab.dataset.tab === 'simulator' && !simulatorGateOk()) return;
+    switchTab(tab.dataset.tab);
+  });
+});
+
+applyTransform();
+</script>
+</body>
+</html>
